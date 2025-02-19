@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+websockets
+loguru
+transformers
+pydantic
+accelerate>=0.26.0
+python-multipart
+pydub
+pyannote.audio
+rich

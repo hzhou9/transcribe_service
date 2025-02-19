@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Audio for Transcription</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .upload-container {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        #result, #status, #transcriptionTable {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            display: none;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .speaker-entry {
+            display: flex;
+            align-items: center;
+            margin: 15px 0;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+        .button-group button {
+            padding: 5px 15px;
+        }
+        #speakerIdentification {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload Audio for Transcription</h1>
+    <div class="upload-container">
+        <form id="uploadForm">
+            <input type="file" id="audioFile" accept="audio/*" required>
+            <button type="submit">Upload</button>&nbsp;* MP3 format only
+        </form>
+    </div>
+    <div id="status"></div>
+    <div id="speakerIdentification" style="display: none;">
+        <h3>Speaker Identification</h3>
+        <p id="speakerCount"></p>
+        <div id="speakerList"></div>
+        <div class="button-group" style="margin-top: 20px;">
+            <button onclick="confirmSpeakerNames()">Confirm</button>
+            <button onclick="skipSpeakerIdentification()">Skip</button>
+        </div>
+    </div>
+    <div id="transcriptionTable" style="display: none;"></div>
+
+    <script>
+        let statusCheckInterval;
+        let filename = null;
+        let transcriptionData = null;
+        let speakerMap = {};
+
+        function formatTime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+
+        function displaySpeakerIdentification(data) {
+            transcriptionData = data;
+            const speakers = [...new Set(data.map(item => item.speaker))];
+            
+            const speakerIdDiv = document.getElementById('speakerIdentification');
+            const countDiv = document.getElementById('speakerCount');
+            const listDiv = document.getElementById('speakerList');
+            
+            countDiv.textContent = `I found ${speakers.length} speaker${speakers.length > 1 ? 's' : ''} in the recording. Would you like to tell me their names?`;
+            
+            // Create form for each speaker
+            listDiv.innerHTML = speakers.map(speaker => {
+                // Find first segment for this speaker
+                const firstSegment = data.find(item => item.speaker === speaker);
+                return `
+                    <div class="speaker-entry" style="margin: 10px 0;">
+                        <label>Speaker ${speaker}:</label>
+                        <audio controls style="margin: 0 10px;">
+                            <source src="${firstSegment.file}" type="audio/wav">
+                            Your browser does not support the audio element.
+                        </audio>
+                        <input type="text" id="speaker-${speaker}" placeholder="Enter name">
+                    </div>
+                `;
+            }).join('');
+            
+            speakerIdDiv.style.display = 'block';
+        }
+
+        function confirmSpeakerNames() {
+            const speakers = [...new Set(transcriptionData.map(item => item.speaker))];
+            speakers.forEach(speaker => {
+                const input = document.getElementById(`speaker-${speaker}`);
+                if (input.value) {
+                    speakerMap[speaker] = input.value;
+                }
+            });
+            
+            document.getElementById('speakerIdentification').style.display = 'none';
+            displayTranscriptionResults(transcriptionData);
+        }
+
+        function skipSpeakerIdentification() {
+            document.getElementById('speakerIdentification').style.display = 'none';
+            displayTranscriptionResults(transcriptionData);
+        }
+
+        function displayTranscriptionResults(data) {
+            const tableDiv = document.getElementById('transcriptionTable');
+            tableDiv.style.display = 'block';
+            
+            const table = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Start</th>
+                            <th>End</th>
+                            <th>Speaker</th>
+                            <th>Text</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${data.map(item => `
+                            <tr>
+                                <td>${formatTime(item.start)}</td>
+                                <td>${formatTime(item.end)}</td>
+                                <td>${speakerMap[item.speaker] || item.speaker}</td>
+                                <td>${item.text}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            tableDiv.innerHTML = table;
+        }
+
+        async function checkStatus(filename) {
+            try {
+                const response = await fetch(`/task_status/${filename}`);
+                const result = await response.json();
+                const statusDiv = document.getElementById('status');
+                statusDiv.style.display = 'block';
+
+                if (result.status === 'processing') {
+                    statusDiv.textContent = `Processing: ${result.info}`;
+                } else if (result.status === 'completed') {
+                    clearInterval(statusCheckInterval);
+                    statusDiv.textContent = 'Transcription completed!';
+                    displaySpeakerIdentification(result.data);
+                } else if (result.status === 'failed') {
+                    clearInterval(statusCheckInterval);
+                    statusDiv.textContent = `Error: ${result.error}`;
+                }
+            } catch (error) {
+                console.error('Status check failed:', error);
+            }
+        }
+
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            const fileInput = document.getElementById('audioFile');
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/upload_audio', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                filename = result.filename;
+                const statusDiv = document.getElementById('status');
+                statusDiv.style.display = 'block';
+                statusDiv.textContent = `Upload successful! Processing: ${filename}`;
+
+                // Start polling status
+                if (statusCheckInterval) {
+                    clearInterval(statusCheckInterval);
+                }
+                statusCheckInterval = setInterval(() => checkStatus(filename), 3000);
+            } catch (error) {
+                alert('Upload failed: ' + error);
+            }
+        });
+    </script>
+</body>
+</html> 
